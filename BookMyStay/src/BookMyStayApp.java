@@ -1,78 +1,77 @@
 import java.util.*;
 
-class Reservation {
-    private String guestName;
-    private String roomType;
-    private String roomId;
-    private double basePrice;
-
-    public Reservation(String guestName, String roomType, String roomId, double basePrice) {
-        this.guestName = guestName;
-        this.roomType = roomType;
-        this.roomId = roomId;
-        this.basePrice = basePrice;
-    }
-
-    public String getGuestName() { return guestName; }
-    public String getRoomType() { return roomType; }
-    public String getRoomId() { return roomId; }
-    public double getBasePrice() { return basePrice; }
-
-    @Override
-    public String toString() {
-        return String.format("ID: %s | Guest: %-10s | Type: %-12s | Price: $%.2f",
-                roomId, guestName, roomType, basePrice);
+class BookingException extends Exception {
+    public BookingException(String message) {
+        super(message);
     }
 }
 
-class BookingHistory {
-    private List<Reservation> history = new ArrayList<>();
+class RoomInventory {
+    private Map<String, Integer> inventory = new HashMap<>();
 
-    public void recordBooking(Reservation reservation) {
-        history.add(reservation);
-    }
-
-    public List<Reservation> getHistory() {
-        return Collections.unmodifiableList(history);
-    }
-}
-
-class BookingReportService {
-    private BookingHistory historyStore;
-
-    public BookingReportService(BookingHistory historyStore) {
-        this.historyStore = historyStore;
-    }
-
-    public void generateSummaryReport() {
-        List<Reservation> records = historyStore.getHistory();
-        double totalRevenue = 0;
-
-        System.out.println("======= SYSTEM AUDIT: CONFIRMED BOOKINGS =======");
-        if (records.isEmpty()) {
-            System.out.println("No records found.");
-        } else {
-            for (Reservation res : records) {
-                System.out.println(res);
-                totalRevenue += res.getBasePrice();
-            }
+    public void addRoomType(String type, int count) throws BookingException {
+        if (count < 0) {
+            throw new BookingException("Invalid Inventory: Initial count for " + type + " cannot be negative.");
         }
-        System.out.println("================================================");
-        System.out.println("Total Bookings: " + records.size());
-        System.out.printf("Total Revenue:  $%.2f%n", totalRevenue);
-        System.out.println("================================================");
+        inventory.put(type, count);
+    }
+
+    public void validateAndDecrement(String type) throws BookingException {
+        if (!inventory.containsKey(type)) {
+            throw new BookingException("Invalid Room Type: '" + type + "' does not exist in our system.");
+        }
+        int currentCount = inventory.get(type);
+        if (currentCount <= 0) {
+            throw new BookingException("Availability Error: No " + type + "s left to book.");
+        }
+        inventory.put(type, currentCount - 1);
+    }
+
+    public int getCount(String type) {
+        return inventory.getOrDefault(type, 0);
+    }
+}
+
+class BookingValidator {
+    public static void validateGuestInfo(String name) throws BookingException {
+        if (name == null || name.trim().isEmpty()) {
+            throw new BookingException("Input Validation: Guest name cannot be empty.");
+        }
     }
 }
 
 public class BookMyStayApp {
     public static void main(String[] args) {
-        BookingHistory historyStore = new BookingHistory();
-        BookingReportService reportService = new BookingReportService(historyStore);
+        RoomInventory inventory = new RoomInventory();
 
-        historyStore.recordBooking(new Reservation("Alice", "Single Room", "S-101", 100.00));
-        historyStore.recordBooking(new Reservation("Bob", "Double Room", "D-202", 180.00));
-        historyStore.recordBooking(new Reservation("Charlie", "Suite", "ST-303", 350.00));
+        try {
+            inventory.addRoomType("Single", 1);
+            inventory.addRoomType("Suite", 0);
 
-        reportService.generateSummaryReport();
+            processBooking(inventory, "Alice", "Single");
+            processBooking(inventory, "Bob", "Single"); // Should fail (No availability)
+            processBooking(inventory, "", "Suite");      // Should fail (Invalid Name)
+            processBooking(inventory, "Charlie", "Penthouse"); // Should fail (Invalid Type)
+
+        } catch (BookingException e) {
+            System.err.println("System Setup Error: " + e.getMessage());
+        }
+
+        System.out.println("\nFinal Single Room Count: " + inventory.getCount("Single"));
+    }
+
+    public static void processBooking(RoomInventory inventory, String name, String type) {
+        try {
+            System.out.println("Attempting booking for " + name + " (" + type + ")...");
+
+            BookingValidator.validateGuestInfo(name);
+            inventory.validateAndDecrement(type);
+
+            System.out.println("SUCCESS: Booking confirmed for " + name);
+        } catch (BookingException e) {
+            System.out.println("FAILED: " + e.getMessage());
+        } finally {
+            System.out.println("-------------------------------------------");
+        }
     }
 }
