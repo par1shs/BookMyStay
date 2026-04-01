@@ -1,83 +1,81 @@
+import java.io.*;
 import java.util.*;
 
-class BookingException extends Exception {
-    public BookingException(String message) {
-        super(message);
-    }
-}
+class BookingState implements Serializable {
+    private static final long serialVersionUID = 1L;
+    public Map<String, Integer> inventory = new HashMap<>();
+    public List<String> confirmedBookings = new ArrayList<>();
 
-class ThreadSafeInventory {
-    private final Map<String, Integer> inventory = new HashMap<>();
-    private final Map<String, Stack<String>> roomPool = new HashMap<>();
-
-    public synchronized void addRoomType(String type, int count) {
+    public void addInventory(String type, int count) {
         inventory.put(type, count);
-        Stack<String> ids = new Stack<>();
-        for (int i = 1; i <= count; i++) {
-            ids.push(type.substring(0, 1) + "-" + (100 + i));
-        }
-        roomPool.put(type, ids);
     }
 
-    public synchronized String bookRoom(String type) throws BookingException {
-        Integer count = inventory.get(type);
-        if (count == null || count <= 0) {
-            throw new BookingException("Sold out: " + type);
-        }
-
-        inventory.put(type, count - 1);
-        return roomPool.get(type).pop();
-    }
-
-    public synchronized int getCount(String type) {
-        return inventory.getOrDefault(type, 0);
+    public void addBooking(String details) {
+        confirmedBookings.add(details);
     }
 }
 
-class GuestRequest implements Runnable {
-    private String guestName;
-    private String roomType;
-    private ThreadSafeInventory inventory;
+class PersistenceService {
+    private static final String FILE_NAME = "hotel_state.ser";
 
-    public GuestRequest(String name, String type, ThreadSafeInventory inventory) {
-        this.guestName = name;
-        this.roomType = type;
-        this.inventory = inventory;
+    public void saveState(BookingState state) {
+        try (ObjectOutputStream oos = new ObjectOutputStream(new FileOutputStream(FILE_NAME))) {
+            oos.writeObject(state);
+            System.out.println("SYSTEM: State persisted to " + FILE_NAME);
+        } catch (IOException e) {
+            System.err.println("SAVE ERROR: " + e.getMessage());
+        }
     }
 
-    @Override
-    public void run() {
-        try {
-            System.out.println(guestName + " is attempting to book a " + roomType + "...");
-            String roomId = inventory.bookRoom(roomType);
-            System.out.println("SUCCESS: " + guestName + " secured Room " + roomId);
-        } catch (BookingException e) {
-            System.out.println("FAILURE: " + guestName + " received error -> " + e.getMessage());
+    public BookingState loadState() {
+        File file = new File(FILE_NAME);
+        if (!file.exists()) {
+            System.out.println("SYSTEM: No persistence file found. Starting fresh.");
+            return new BookingState();
+        }
+
+        try (ObjectInputStream ois = new ObjectInputStream(new FileInputStream(FILE_NAME))) {
+            BookingState state = (BookingState) ois.readObject();
+            System.out.println("SYSTEM: State restored successfully from " + FILE_NAME);
+            return state;
+        } catch (IOException | ClassNotFoundException e) {
+            System.err.println("RECOVERY ERROR: Corrupted file. Starting fresh. " + e.getMessage());
+            return new BookingState();
         }
     }
 }
 
 public class BookMyStayApp {
-    public static void main(String[] args) throws InterruptedException {
-        ThreadSafeInventory sharedInventory = new ThreadSafeInventory();
-        sharedInventory.addRoomType("Single", 2);
+    public static void main(String[] args) {
+        PersistenceService persistence = new PersistenceService();
 
-        System.out.println("--- Starting Concurrent Booking Simulation ---");
-        System.out.println("Initial Inventory: 2 Single Rooms\n");
+        // 1. Startup: Load state from previous session
+        BookingState currentState = persistence.loadState();
 
-        Thread t1 = new Thread(new GuestRequest("Alice", "Single", sharedInventory));
-        Thread t2 = new Thread(new GuestRequest("Bob", "Single", sharedInventory));
-        Thread t3 = new Thread(new GuestRequest("Charlie", "Single", sharedInventory));
+        // 2. Display recovered state
+        System.out.println("\n--- Current Inventory Status ---");
+        currentState.inventory.forEach((type, count) -> System.out.println(type + ": " + count));
 
-        t1.start();
-        t2.start();
-        t3.start();
+        System.out.println("\n--- Recovered Booking History ---");
+        if (currentState.confirmedBookings.isEmpty()) {
+            System.out.println("No history found.");
+        } else {
+            currentState.confirmedBookings.forEach(System.out::println);
+        }
 
-        t1.join();
-        t2.join();
-        t3.join();
+        // 3. Simulate operations in current session
+        System.out.println("\nSYSTEM: Processing new booking for 'Diana'...");
+        if (currentState.inventory.getOrDefault("Single", 0) > 0) {
+            currentState.inventory.put("Single", currentState.inventory.get("Single") - 1);
+            currentState.addBooking("Diana - Single Room - Confirmed 2026-04-01");
+        } else {
+            // Seed initial data if file didn't exist
+            currentState.addInventory("Single", 5);
+            currentState.addInventory("Double", 3);
+        }
 
-        System.out.println("\nSimulation Complete.");
-        System.out.println("Final Inventory Count: " + sharedInventory.getCount("Single"));
+        // 4. Shutdown: Persist state for next restart
+        persistence.saveState(currentState);
+        System.out.println("SYSTEM: Application terminated safely.");
     }
 }
