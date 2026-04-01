@@ -6,81 +6,78 @@ class BookingException extends Exception {
     }
 }
 
-class InventoryManager {
-    private Map<String, Integer> counts = new HashMap<>();
-    private Map<String, Stack<String>> pool = new HashMap<>();
+class ThreadSafeInventory {
+    private final Map<String, Integer> inventory = new HashMap<>();
+    private final Map<String, Stack<String>> roomPool = new HashMap<>();
 
-    public void setup(String type, int count) {
-        counts.put(type, count);
-        pool.put(type, new Stack<>());
+    public synchronized void addRoomType(String type, int count) {
+        inventory.put(type, count);
+        Stack<String> ids = new Stack<>();
         for (int i = 1; i <= count; i++) {
-            pool.get(type).push(type.substring(0, 1) + "-" + (100 + i));
+            ids.push(type.substring(0, 1) + "-" + (100 + i));
         }
+        roomPool.put(type, ids);
     }
 
-    public String acquire(String type) throws BookingException {
-        if (!counts.containsKey(type) || counts.get(type) <= 0) {
-            throw new BookingException("No availability for " + type);
+    public synchronized String bookRoom(String type) throws BookingException {
+        Integer count = inventory.get(type);
+        if (count == null || count <= 0) {
+            throw new BookingException("Sold out: " + type);
         }
-        counts.put(type, counts.get(type) - 1);
-        return pool.get(type).pop();
+
+        inventory.put(type, count - 1);
+        return roomPool.get(type).pop();
     }
 
-    public void release(String type, String roomId) {
-        counts.put(type, counts.get(type) + 1);
-        pool.get(type).push(roomId);
-    }
-
-    public int getAvailable(String type) {
-        return counts.getOrDefault(type, 0);
+    public synchronized int getCount(String type) {
+        return inventory.getOrDefault(type, 0);
     }
 }
 
-class CancellationService {
-    private InventoryManager inventory;
-    private Map<String, String> activeBookings;
+class GuestRequest implements Runnable {
+    private String guestName;
+    private String roomType;
+    private ThreadSafeInventory inventory;
 
-    public CancellationService(InventoryManager inventory, Map<String, String> activeBookings) {
+    public GuestRequest(String name, String type, ThreadSafeInventory inventory) {
+        this.guestName = name;
+        this.roomType = type;
         this.inventory = inventory;
-        this.activeBookings = activeBookings;
     }
 
-    public void cancelBooking(String guestName, String type) throws BookingException {
-        if (!activeBookings.containsKey(guestName)) {
-            throw new BookingException("Cancellation Failed: No active booking found for " + guestName);
+    @Override
+    public void run() {
+        try {
+            System.out.println(guestName + " is attempting to book a " + roomType + "...");
+            String roomId = inventory.bookRoom(roomType);
+            System.out.println("SUCCESS: " + guestName + " secured Room " + roomId);
+        } catch (BookingException e) {
+            System.out.println("FAILURE: " + guestName + " received error -> " + e.getMessage());
         }
-
-        String roomId = activeBookings.remove(guestName);
-        inventory.release(type, roomId);
-
-        System.out.println("CANCELLED: Booking for " + guestName + " (Room " + roomId + ") reversed.");
     }
 }
 
 public class BookMyStayApp {
-    public static void main(String[] args) {
-        InventoryManager inventory = new InventoryManager();
-        inventory.setup("Single", 2);
+    public static void main(String[] args) throws InterruptedException {
+        ThreadSafeInventory sharedInventory = new ThreadSafeInventory();
+        sharedInventory.addRoomType("Single", 2);
 
-        Map<String, String> activeBookings = new HashMap<>();
-        CancellationService cancellationService = new CancellationService(inventory, activeBookings);
+        System.out.println("--- Starting Concurrent Booking Simulation ---");
+        System.out.println("Initial Inventory: 2 Single Rooms\n");
 
-        try {
-            System.out.println("Initial Inventory: " + inventory.getAvailable("Single"));
+        Thread t1 = new Thread(new GuestRequest("Alice", "Single", sharedInventory));
+        Thread t2 = new Thread(new GuestRequest("Bob", "Single", sharedInventory));
+        Thread t3 = new Thread(new GuestRequest("Charlie", "Single", sharedInventory));
 
-            String id1 = inventory.acquire("Single");
-            activeBookings.put("Alice", id1);
-            System.out.println("CONFIRMED: Alice assigned to " + id1);
+        t1.start();
+        t2.start();
+        t3.start();
 
-            System.out.println("Inventory after booking: " + inventory.getAvailable("Single"));
+        t1.join();
+        t2.join();
+        t3.join();
 
-            cancellationService.cancelBooking("Alice", "Single");
-            System.out.println("Inventory after cancellation: " + inventory.getAvailable("Single"));
-
-            cancellationService.cancelBooking("Bob", "Single");
-
-        } catch (BookingException e) {
-            System.out.println("ERROR: " + e.getMessage());
-        }
+        System.out.println("\nSimulation Complete.");
+        System.out.println("Final Inventory Count: " + sharedInventory.getCount("Single"));
     }
 }
